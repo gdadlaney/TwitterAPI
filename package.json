@@ -1,0 +1,24 @@
+{
+  "name": "twitter_api",
+  "version": "1.0.0",
+  "description": "An interpretation of some of the Twitter backend APIs using Express.js ",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gdadlaney/TwitterAPI.git"
+  },
+  "author": "Gaurav Dadlaney",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/gdadlaney/TwitterAPI/issues"
+  },
+  "homepage": "https://github.com/gdadlaney/TwitterAPI#readme",
+  "dependencies": {
+    "express": "^4.16.4",
+    "mysql2": "^1.6.5",
+    "nodemon": "^1.19.0"
+  }
+}
