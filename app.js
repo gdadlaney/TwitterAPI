@@ -1,8 +1,11 @@
 const express = require("express");
 const mysql = require("mysql2/promise");
 const bodyParser = require("body-parser");
+const Joi = require("joi");
+const session = require('express-session');
+const bcrypt = require('bcrypt');
 
-const PORT = 5000;          // get from env
+const PORT = 5000;                                   // get from env
 const pool = mysql.createPool({
     host: 'localhost',
     user: 'root',
@@ -11,121 +14,196 @@ const pool = mysql.createPool({
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
-});  
+}); 
+const saltRounds = 12;
 
 // set up express app instance and configure middleware
 app = express();
 app.use(bodyParser.urlencoded({extended:false}));
 app.use(bodyParser.json());
+app.use(session({secret: 'myRandomSecret'}));               // deprecated
 
-app.get("/hello", (req, res) => {
-    res.send("Hello World");
-});
 
-// for debugging
-// Lists all registered users
-app.get("/users", getUsers);
+app.post("/register", handleRegister);
+app.post("/login", handleLogin);
+app.get("/users", getUsers);                    // Lists all registered users
 
+
+app.post('/tweet', createTweet);
+app.get('/tweets', getOwnTweets);
+
+// More routes
+// app.get('/followers', getFollowers);
+// app.post('/follow/:username', handleFollow);
+// app.post('/unfollow/:username', handleUnfollow); 
+// app.delete('/tweet/:tweet_id', deleteTweet);
+// app.get('/tweets/username', gerUserTweets);
+
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+// Function definitions
 async function getUsers(req, res) {
-    const result = await pool.query("SELECT * FROM users;");
-    res.send(result[0]);
+    const result = await pool.query("SELECT user_id, username FROM users;");
+    res.status(200).send(result[0]);
 }
 
-// temp
-app.post("/register", handleRegister);
+function validateSignUpInput(body) {
+    const schema = {
+        username: Joi.string().min(3).required(),
+        password: Joi.string().min(6).required(),
+    };
 
-// Refactoring
-// 1. res.status(4..)
-// 2. IsValidInput()
+    return Joi.validate(body, schema);
+}
 
+// Currently, just takes in username & password, more fields can be added as and when required.
 async function handleRegister(req, res) {
+    // if a user is already logged in
+    if (req.session.username)
+        return res.status(400).send({
+            success: false,
+            message: "logout first",
+        });
+
     // Input validation
-    if ( !req.body.username ) {
-        res.send({
-            registration_successful: false,
-            error: "username required",
-        });
-        return;
-    } else if ( !req.body.password ) {
-        res.send({
-            registration_successful: false,
-            error: "password required",
-        });
+    const { error } = validateSignUpInput(req.body);
+    if ( error ) {
+        res.status(400).send({message: error.details[0].message});
         return;
     }
-    // can also return an array of errors, if both don't exist
-
-    // todo: hash password
-    
-    // todo: query the db for the same username, if it exists, return with error
-    // try to do the insert in the same error, else another API may add it with the same name.
-    // use use a transaction and use the same connection.
 
     try {
+        const hashedPassword = await bcrypt.hash(req.body.password, saltRounds);
+
         await pool.query(
             "INSERT INTO users(username, password) values(?,?)",
-            [req.body.username, req.body.password]
+            [req.body.username, hashedPassword]
         );
-        // throws promise exception(probaby due to an mysql error), that username/password cannot be null.
     } catch(err) {
-        // console.log(err);
+        
         if ( err.code == 'ER_DUP_ENTRY' ) {
-            res.send({
+            res.status(400).send({
                 registration_successful: false,
                 error: "username already exists",
             });
-            return;
         }
-        // else - internal server error?
+        // else internal server error
+        return;
     }
     
     // todo: if exceptions encountered - An internal error occured, try again later.
+    
 
-    res.send({
+    res.status(200).send({
         registration_successful: true,
         username: req.body.username,
     });
 }
 
-app.post("/login", handleLogin);
-
 async function handleLogin(req, res) {
+    // if a user is already logged in
+    if (req.session.username)
+        return res.status(400).send({
+            success: false,
+            message: "logout first",
+        });
+
     // same check for username & password
+    const { error } = validateSignUpInput(req.body);
+    if ( error ) {
+        res.status(400).send({message: error.details[0].message});
+        return;
+    }
 
     let ret_obj = {
         login_successful: true,
     };
 
     const result = await pool.query(
-        "SELECT * FROM users WHERE username = ? AND password = ?",
-        [req.body.username, req.body.password]
+        "SELECT * FROM users WHERE username = ?",
+        [req.body.username]
     );
+
+    // check username
     if ( result[0].length < 1 ) {
-        // throw new Error("User not found with given credentials")
         ret_obj.login_successful = false;
-        ret_obj.error = "User not found with given credentials";
-        res.send(ret_obj);
+        ret_obj.error = "username not found";
+        res.status(400).send(ret_obj);
         return;
     } else if ( result[0].length > 1 ) {
-        // will this ever occur? - DB admin/ race conditions in insert
+        // can occur due to DB admin/ race conditions in insert
+        // throw an error that will be caught by the error handler at the end
     }
-    // can also individually identify if password is wrong or username is wrong, with just the one query.
+    
+    // check password
+    const passwordHash = result[0][0].password;
+    const passwordMatch = await bcrypt.compare(req.body.password, passwordHash);
+    if ( !passwordMatch ) {
+        ret_obj.login_successful = false;
+        ret_obj.error = "wrong password";
+        res.status(400).send(ret_obj);
+        return;
+    }
+
+    // set session
+    req.session.username = req.body.username;
 
     ret_obj.username = req.body.username;
-    res.send(ret_obj);
+    res.status(200).send(ret_obj);
 }
 
-// use successful in both login & register.
+app.post('/logout', handleLogout);
+function handleLogout(req, res) {
+    if (!req.session.username)
+        return res.status(400).send({
+            success: false,
+            message: "not logged in",
+        });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    req.session.destroy((err) => {
+        if(!err) {
+            res.status(200).send({
+                success: true,
+                message: "logged out",
+            });
+        } else {
+            res.status(500).send({
+                success: false,
+                message: "log out failed, try again",
+            });
+        }
+    });
+}
 
-// temp
-// 1. ValidateInput(), 
-// 2. joi, better to use it inside the function
+async function createTweet(req, res) {
+    if (!req.session.username)
+        return res.status(400).send({
+            success: false,
+            message: "not logged in",
+        });
+    
+    // todo: input validation - data must be less than 280 chars, and must be required
 
-// ValidateInput(res) - returns Object(works)
-// IsValidInput(res) - returns (true, false) and sends data from inside(more readable) - seems best, a rename could be better
-// () - throws exception, can use finally, to send & return
-// IsValidInput() can be combined with handleErrorMessage - repeated code
+    await pool.query(
+        "INSERT INTO tweets(username, tweet_data) values(?,?)",
+        [req.session.username, req.body.tweet_data]
+    );
 
-// {success:false, message:'query error'} seems like a convention on Stack Overflow
+    const result = await pool.query("SELECT tweet_id FROM tweets WHERE username = ? AND tweet_data = ?;", [req.session.username, req.body.tweet_data]);
+    res.status(200).send({
+        username: req.session.username,
+        tweet_id: result[0][0].tweet_id,
+        tweet_data: req.body.tweet_data,
+    });
+}
+
+async function getOwnTweets(req, res) {
+    if (!req.session.username)
+        return res.status(400).send({
+            success: false,
+            message: "not logged in",
+        });
+
+    const result = await pool.query("SELECT tweet_id, tweet_data FROM tweets WHERE username = ?;", [req.session.username]);  
+    res.status(200).send(result[0]);
+}
