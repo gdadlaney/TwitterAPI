@@ -5,12 +5,18 @@ const Joi = require("joi");
 const session = require('express-session');
 const bcrypt = require('bcrypt');
 
-const PORT = 5000;                                   // get from env
+const {
+	SQL_USER,
+	SQL_PASS,
+    SQL_DB,
+    ENV_PORT,
+} = require('./config');
+const PORT = ENV_PORT || 5000;                                   // get from env
 const pool = mysql.createPool({
     host: 'localhost',
-    user: 'root',
-    password: 'root123',
-    database: 'twitterAPI',
+    user: SQL_USER,
+    password: SQL_PASS,
+    database: SQL_DB,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
